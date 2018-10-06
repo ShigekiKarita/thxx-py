@@ -5,7 +5,6 @@ from torch.autograd import gradcheck
 
 def test_runtime():
     """test that there are no runtime errors"""
-    from torch.autograd import Variable
     import torch.nn as nn
     import torch.nn.functional as F
     x = torch.randn(30,10)
@@ -35,6 +34,23 @@ def test_symeig():
     print(v.grad)
 
 
+def test_batch_symeig_forward():
+    xs = torch.randn(3, 5, 5).double()
+    ws, vs = S.symeig(xs)
+    for i in range(xs.shape[0]):
+        w, v = S.symeig(xs[i])
+        torch.testing.assert_allclose(ws[i], w)
+        torch.testing.assert_allclose(vs[i], v)
+
+def test_batch_symeig_backward():
+    input = torch.randn(3, 5, 5).double()
+    input.requires_grad = True
+    for upper in (True, False):
+        assert gradcheck(S.BatchSymeig(upper), (input,), eps=1e-6, atol=1e-4)
+
+
 # test_symeig()
 test_runtime()
 test_gradcheck()
+test_batch_symeig_forward()
+test_batch_symeig_backward()
