@@ -43,11 +43,19 @@ def test_batch_symeig_forward():
         torch.testing.assert_allclose(vs[i], v)
 
 def test_batch_symeig_backward():
-    input = torch.randn(3, 5, 5).double()
+    input = torch.randn(2, 3, 3).double()
+    input1 = input.clone()
     input.requires_grad = True
-    for upper in (True, False):
-        assert gradcheck(S.BatchSymeig(upper), (input,), eps=1e-6, atol=1e-4)
-
+    w, v = S.symeig(input)
+    (w.sum() + v.sum()).backward()
+    # print(input.grad)
+    for i in range(input1.size(0)):
+        in1 = input1[i]
+        in1.requires_grad = True
+        wi, vi = S.symeig(in1)
+        (wi.sum() + vi.sum()).backward()
+        # print(in1.grad)
+        torch.testing.assert_allclose(input.grad[i], in1.grad)
 
 # test_symeig()
 test_runtime()

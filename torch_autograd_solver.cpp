@@ -9,19 +9,20 @@ using at::Tensor;
 // http://eprints.maths.ox.ac.uk/1079/1/NA-08-01.pdf
 void symeig_backward(
     // backward variables
-    Tensor gx,
-    const Tensor& grad_loss_wrt_eigenvalues,
-    const Tensor& grad_loss_wrt_eigenvectors,
+    Tensor gx, // [m, m]
+    const Tensor& grad_loss_wrt_eigenvalues, // [m]
+    const Tensor& grad_loss_wrt_eigenvectors, // [m, m]
     // forward variables
-    const Tensor& x,
-    const Tensor& eigenvalues,
-    const Tensor& eigenvectors,
+    const Tensor& x, // [m, m]
+    const Tensor& eigenvalues, // [m]
+    const Tensor& eigenvectors, // [m, m]
     // config
     bool upper) {
     auto vt = eigenvectors.t();
     if (grad_loss_wrt_eigenvectors.defined()) {
-        Tensor F = eigenvalues.unsqueeze(0).expand_as(x).clone();
+        Tensor F = eigenvalues.unsqueeze(0).expand_as(x).clone(); // [m, m]
         F.sub_(at::unsqueeze(eigenvalues, 1));
+        // auto F = at::zeros_like(x);
         F.diagonal().fill_(INFINITY);
         F.pow_(-1);
         F.mul_(vt.mm(grad_loss_wrt_eigenvectors));
@@ -95,30 +96,19 @@ void batch_symeig_backward_faster(
     // config
     bool upper) {
     auto batch_size = x.size(0);
-    auto vt = eigenvectors.transpose(-1, -2);
+    auto m = x.size(1);
+    auto vt = eigenvectors.transpose(1, 2);
     if (grad_loss_wrt_eigenvectors.defined()) {
-        // (b, m, m)
-        Tensor F = eigenvalues.unsqueeze(-2).expand_as(x).clone();
-        std::cout << "done" << __LINE__ << std::endl;
-        F.sub_(at::unsqueeze(eigenvalues, -2));
-        std::cout << "done" << __LINE__ << std::endl;
-        // TODO implment batch_diagonal (strided [m * m, m + 1] vector ?)
-#pragma omp for
-        for (int64_t i = 0; i < batch_size; ++i) {
-            F.select(0, i).diagonal().fill_(INFINITY);
-            std::cout << "done" << __LINE__ << std::endl;
-        }
-        F.pow_(-1);
+        Tensor F = eigenvalues.unsqueeze(1).expand_as(x).clone();
+        F.sub_(at::unsqueeze(eigenvalues, 2));
+        F.diagonal(0, 1, 2).fill_(INFINITY);
+        F.reciprocal_();
         F.mul_(vt.bmm(grad_loss_wrt_eigenvectors));
-        std::cout << "done" << __LINE__ << std::endl;
         gx.add_(eigenvectors.bmm(F.bmm(vt)));
-        std::cout << "done" << __LINE__ << std::endl;
     }
     if (grad_loss_wrt_eigenvalues.defined()) {
         gx.add_((eigenvectors * grad_loss_wrt_eigenvalues.unsqueeze(-1)).bmm(vt));
-        std::cout << "done" << __LINE__ << std::endl;
     }
-    std::cout << "done" << __LINE__ << std::endl;
 
     if (upper) {
         // TODO implemnt batch_triu/l
