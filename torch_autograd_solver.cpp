@@ -2,67 +2,89 @@
 
 #include <iostream>
 
-using at::Tensor;
-
+/*
+  Suppose A is square matrix, solve A V = V W
+  
+ */
 // forked from pytorch 0.5
 // https://github.com/sethah/pytorch/blob/81b61db9219ffeb8fc0c8ab3abe0f0b5a7edf4f4/tools/autograd/templates/Functions.cpp#L1514
 // http://eprints.maths.ox.ac.uk/1079/1/NA-08-01.pdf
-Tensor symeig_backward(
+at::Tensor symeig_backward(
     // backward variables
-    const Tensor& grad_loss_wrt_eigenvalues, // [m]
-    const Tensor& grad_loss_wrt_eigenvectors, // [m, m]
+    const at::Tensor& grad_loss_wrt_eigenvalues, // [m]
+    const at::Tensor& grad_loss_wrt_eigenvectors, // [m, m]
     // forward variables
-    const Tensor& x, // [m, m]
-    const Tensor& eigenvalues, // [m]
-    const Tensor& eigenvectors, // [m, m]
+    const at::Tensor& a, // [m, m]
+    const at::Tensor& eigenvalues, // [m]
+    const at::Tensor& eigenvectors, // [m, m]
     // config
     bool upper)
 {
-    Tensor gx; // [m, m]
+    auto m = a.size(0);
+    AT_CHECK(a.dim() == 2, "not square input matrix");
+    AT_CHECK(a.size(1) == m, "not square input matrix");
+
+    AT_CHECK(eigenvalues.dim() == 1, "invalid eigenvalues shape");
+    AT_CHECK(eigenvalues.size(0) == m, "invalid eigenvalues shape");
+    AT_CHECK(eigenvectors.dim() == 2, "invalid eigenvectors shape");
+    AT_CHECK(eigenvectors.size(0) == m, "invalid eigenvectors shape");
+    AT_CHECK(eigenvectors.size(1) == m, "invalid eigenvectors shape");
+
+    AT_CHECK(grad_loss_wrt_eigenvalues.dim() == 1, "invalid grad_loss_wrt_eigenvalues shape");
+    AT_CHECK(grad_loss_wrt_eigenvalues.size(0) == m, "invalid grad_loss_wrt_eigenvalues shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.dim() == 2, "invalid grad_loss_wrt_eigenvectors shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.size(0) == m, "invalid grad_loss_wrt_eigenvectors shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.size(1) == m, "invalid grad_loss_wrt_eigenvectors shape");
+
+    at::Tensor ga; // [m, m]
     auto vt = eigenvectors.t();
     if (grad_loss_wrt_eigenvectors.defined())
     {
-        Tensor F = eigenvalues.unsqueeze(0).expand_as(x).clone(); // [m, m]
+        at::Tensor F = eigenvalues.unsqueeze(0).expand_as(a).clone(); // [m, m]
         F.sub_(at::unsqueeze(eigenvalues, 1));
-        // auto F = at::zeros_like(x);
         F.diagonal().fill_(INFINITY);
-        F.pow_(-1);
+        F.reciprocal_();
         F.mul_(vt.mm(grad_loss_wrt_eigenvectors));
-        gx = eigenvectors.mm(F.mm(vt));
+        ga = eigenvectors.mm(F.mm(vt));
     }
     if (grad_loss_wrt_eigenvalues.defined())
     {
-        auto gx_gw = (eigenvectors * grad_loss_wrt_eigenvalues).mm(vt);
-        if (gx.defined()) {
-            gx.add_(gx_gw);
+        auto ga_gw = (eigenvectors * grad_loss_wrt_eigenvalues).mm(vt);
+        if (ga.defined()) {
+            ga.add_(ga_gw);
         } else {
-            gx = gx_gw;
+            ga = ga_gw;
         }
     }
     if (upper)
     {
-        auto gxu = at::triu(gx.t(), 1);
-        gx.triu_().add_(gxu);
+        auto gau = at::triu(ga.t(), 1);
+        ga.triu_().add_(gau);
     }
     else
     {
-        auto gxl = at::tril(gx.t(), -1);
-        gx.tril_().add_(gxl);
+        auto gal = at::tril(ga.t(), -1);
+        ga.tril_().add_(gal);
     }
-    return gx;
+    return ga;
 }
 
-std::tuple<Tensor, Tensor> batch_symeig_forward(const Tensor& input, bool upper)
+std::tuple<at::Tensor, at::Tensor> batch_symeig_forward(const at::Tensor& input, bool upper)
 {
     auto batch_size = input.size(0);
     auto n = input.size(1);
+    AT_CHECK(input.dim() == 3, "not batch square input matrix");
+    AT_CHECK(input.size(1) == n, "not batch square input matrix");
+    AT_CHECK(input.size(2) == n, "not batch square input matrix");
+
     auto w = at::empty({batch_size, n}, input.type());
     auto v = at::empty({batch_size, n, n}, input.type());
+    // FIXME: rewrite this with at::parallel_for in ATen/Parallel.h
 #pragma omp for
     for (int64_t i = 0; i < batch_size; ++i)
     {
         at::Tensor wi, vi;
-        // FIXME use syev directly to avoid fragmented memory alloc https://github.com/pytorch/pytorch/blob/695465915a88f4803dfae152151bb56be5c99410/aten/src/TH/generic/THTensorLapack.cpp#L361
+        // FIXME use syev directly to avoid fragmented memory alloc https://github.com/pytorch/pytorch/blob/695465915a88f4803dfae152151bb56be5c99410/aten/src/TH/generic/THat::TensorLapack.cpp#L361
         std::tie(wi, vi) = at::symeig(input.select(0, i), true, upper);
         w.select(0, i).copy_(wi);
         v.select(0, i).copy_(vi);
@@ -70,20 +92,40 @@ std::tuple<Tensor, Tensor> batch_symeig_forward(const Tensor& input, bool upper)
     return {w, v};
 }
 
-Tensor batch_symeig_backward(
+at::Tensor batch_symeig_backward(
     // backward variables
-    const Tensor& grad_loss_wrt_eigenvalues, // [b, m]
-    const Tensor& grad_loss_wrt_eigenvectors, // [b, m, m]
+    const at::Tensor& grad_loss_wrt_eigenvalues, // [b, m]
+    const at::Tensor& grad_loss_wrt_eigenvectors, // [b, m, m]
     // forward variables
-    const Tensor& x, // [b, m, m]
-    const Tensor& eigenvalues, // [b, m]
-    const Tensor& eigenvectors, // [b, m, m]
+    const at::Tensor& x, // [b, m, m]
+    const at::Tensor& eigenvalues, // [b, m]
+    const at::Tensor& eigenvectors, // [b, m, m]
     // config
     bool upper)
 {
-    Tensor gx; // [b, m, m]
     auto batch_size = x.size(0);
     auto m = x.size(1);
+
+    AT_CHECK(x.dim() == 3, "not batch square input matrix");
+    AT_CHECK(x.size(1) == m, "not batch square input matrix");
+    AT_CHECK(x.size(2) == m, "not batch square input matrix");
+    AT_CHECK(eigenvalues.dim() == 2, "invalid eigenvalues shape");
+    AT_CHECK(eigenvalues.size(0) == batch_size, "invalid eigenvalues shape");
+    AT_CHECK(eigenvalues.size(1) == m, "invalid eigenvalues shape");
+    AT_CHECK(eigenvectors.dim() == 3, "invalid eigenvectors shape");
+    AT_CHECK(eigenvectors.size(0) == batch_size, "invalid eigenvectors shape");
+    AT_CHECK(eigenvectors.size(1) == m, "invalid eigenvectors shape");
+    AT_CHECK(eigenvectors.size(2) == m, "invalid eigenvectors shape");
+
+    AT_CHECK(grad_loss_wrt_eigenvalues.dim() == 2, "invalid grad_loss_wrt_eigenvalues shape");
+    AT_CHECK(grad_loss_wrt_eigenvalues.size(0) == batch_size, "invalid grad_loss_wrt_eigenvalues shape");
+    AT_CHECK(grad_loss_wrt_eigenvalues.size(1) == m, "invalid grad_loss_wrt_eigenvalues shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.dim() == 3, "invalid grad_loss_wrt_eigenvectors shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.size(0) == batch_size, "invalid grad_loss_wrt_eigenvectors shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.size(1) == m, "invalid grad_loss_wrt_eigenvectors shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.size(2) == m, "invalid grad_loss_wrt_eigenvectors shape");
+
+    at::Tensor gx; // [b, m, m]
     auto vt = eigenvectors.transpose(1, 2);
     if (grad_loss_wrt_eigenvectors.defined())
     {
@@ -107,8 +149,10 @@ Tensor batch_symeig_backward(
     // TODO implemnt batch_triu/l
     if (upper)
     {
+        // FIXME: rewrite this with at::parallel_for in ATen/Parallel.h
 #pragma omp for
-        for (int64_t i = 0; i < batch_size; ++i) {
+        for (int64_t i = 0; i < batch_size; ++i)
+        {
             auto&& gxi = gx.select(0, i);
             auto gxu = at::triu(gxi.t(), 1);
             gxi.triu_().add_(gxu);
@@ -117,7 +161,8 @@ Tensor batch_symeig_backward(
     else
     {
 #pragma omp for
-        for (int64_t i = 0; i < batch_size; ++i) {
+        for (int64_t i = 0; i < batch_size; ++i)
+        {
             auto&& gxi = gx.select(0, i);
             auto gxl = at::tril(gxi.t(), -1);
             gxi.tril_().add_(gxl);
@@ -126,8 +171,45 @@ Tensor batch_symeig_backward(
     return gx;
 }
 
+std::tuple<at::Tensor, at::Tensor> generalized_symeig_backward(
+    // backward variables
+    const at::Tensor& grad_loss_wrt_eigenvalues, // [m]
+    const at::Tensor& grad_loss_wrt_eigenvectors, // [m, m]
+    // forward variables
+    const at::Tensor& a, // [m, m]
+    const at::Tensor& b, // [m, m]
+    const at::Tensor& eigenvalues, // [m]
+    const at::Tensor& eigenvectors, // [m, m]
+    // config
+    bool upper)
+{
+    auto m = a.size(0);
+    AT_CHECK(a.dim() == 2, "not square input-A matrix");
+    AT_CHECK(a.size(1) == m, "not square input-A matrix");
+    AT_CHECK(b.dim() == 2, "not square input-B matrix");
+    AT_CHECK(b.size(0) == m, "not square input-B matrix");
+    AT_CHECK(b.size(1) == m, "not square input-B matrix");
+
+    AT_CHECK(eigenvalues.dim() == 1, "invalid eigenvalues shape");
+    AT_CHECK(eigenvalues.size(0) == m, "invalid eigenvalues shape");
+    AT_CHECK(eigenvectors.dim() == 2, "invalid eigenvectors shape");
+    AT_CHECK(eigenvectors.size(0) == m, "invalid eigenvectors shape");
+    AT_CHECK(eigenvectors.size(1) == m, "invalid eigenvectors shape");
+
+    AT_CHECK(grad_loss_wrt_eigenvalues.dim() == 1, "invalid grad_loss_wrt_eigenvalues shape");
+    AT_CHECK(grad_loss_wrt_eigenvalues.size(0) == m, "invalid grad_loss_wrt_eigenvalues shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.dim() == 2, "invalid grad_loss_wrt_eigenvectors shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.size(0) == m, "invalid grad_loss_wrt_eigenvectors shape");
+    AT_CHECK(grad_loss_wrt_eigenvectors.size(1) == m, "invalid grad_loss_wrt_eigenvectors shape");
+
+    auto ga = at::empty_like(a);
+    auto gb = at::empty_like(b);
+    return {a, b};
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("symeig_backward", &symeig_backward, "basic symeig backward");
     m.def("batch_symeig_forward", &batch_symeig_forward, "batch symeig forward");
     m.def("batch_symeig_backward", &batch_symeig_backward, "batch symeig backward");
+    m.def("generalized_symeig_backward", &generalized_symeig_backward, "generalized symeig backward");
 }

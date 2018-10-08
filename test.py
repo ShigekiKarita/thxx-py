@@ -57,8 +57,27 @@ def test_batch_symeig_backward():
         # print(in1.grad)
         torch.testing.assert_allclose(input.grad[i], in1.grad)
 
+def test_generalized_symeig_forward():
+    a = torch.randn(3, 3).double()
+    a = a.t().mm(a)
+    b = torch.randn(3, 3).double()
+    b = b.t().mm(b)
+    w, v = S.symeig(a, b)
+    torch.testing.assert_allclose(a.mm(v), w * b.mm(v))
+
+def test_generalized_symeig_backward():
+    a = torch.randn(3, 3).double()
+    a = a.t().mm(a)
+    a.requires_grad=True
+    b = torch.randn(3, 3).double()
+    b = b.t().mm(b)
+    b.requires_grad=True
+    assert gradcheck(S.GeneralizedSymeig(), (a, b), eps=1e-6, atol=1e-4)
+
+
 # test_symeig()
-test_runtime()
-test_gradcheck()
-test_batch_symeig_forward()
-test_batch_symeig_backward()
+# test_runtime()
+# test_gradcheck()
+# test_batch_symeig_forward()
+# test_batch_symeig_backward()
+test_generalized_symeig_forward()
