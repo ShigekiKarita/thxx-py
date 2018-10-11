@@ -19,10 +19,11 @@ TODO
 - batch_svd
 - batch/complex inv
 
-
-see `torch_autograd_solver_/__init__.py`
-
 ## requirements
 
 - torch 0.4.1 - 0.5.0
-- (CUDA optional) https://github.com/ShigekiKarita/pytorch-cusolver
+
+## dev
+
+1. `python setup.py install`
+2. `pytest`

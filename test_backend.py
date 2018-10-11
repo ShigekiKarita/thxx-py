@@ -96,8 +96,10 @@ def test_complex_gemm():
                 torch.testing.assert_allclose(c[i, j, 0], cr)
                 torch.testing.assert_allclose(c[i, j, 1], ci)
 
-test_batch_eigh()
-test_generalized_eigh()
-test_batch_matinv()
-test_batch_svd()
-test_complex_gemm()
+
+if __name__ == "__main__":
+    test_batch_eigh()
+    test_generalized_eigh()
+    test_batch_matinv()
+    test_batch_svd()
+    test_complex_gemm()

@@ -22,6 +22,8 @@ def test_gradcheck():
         assert gradcheck(S.BasicSymeig(upper=upper), (input,), eps=1e-6, atol=1e-4)
 
 def test_symeig():
+    if torch.__version__.startswith("0.4"):
+        return
     # NOTE need pytorch 0.5.0 or 1.0
     a = torch.tensor([[ 1.96,  0.00,  0.00,  0.00,  0.00],
                       [-6.49,  3.80,  0.00,  0.00,  0.00],
@@ -65,7 +67,7 @@ def test_generalized_symeig_forward():
     w, v = S.symeig(a, b)
     torch.testing.assert_allclose(a.mm(v), w * b.mm(v))
 
-def test_generalized_symeig_backward():
+def wip_test_generalized_symeig_backward():
     a = torch.randn(3, 3).double()
     a = a.t().mm(a)
     a.requires_grad=True
@@ -75,10 +77,11 @@ def test_generalized_symeig_backward():
     assert gradcheck(S.GeneralizedSymeig(), (a, b), eps=1e-6, atol=1e-4)
 
 
-# test_symeig() # need pytorch 0.5.0 or later
-test_runtime()
-test_gradcheck()
-test_batch_symeig_forward()
-test_batch_symeig_backward()
-test_generalized_symeig_forward()
-# test_generalized_symeig_backward()
+if __name__ == "__main__":
+    # test_symeig() # need pytorch 0.5.0 or later
+    test_runtime()
+    test_gradcheck()
+    test_batch_symeig_forward()
+    test_batch_symeig_backward()
+    test_generalized_symeig_forward()
+    # test_generalized_symeig_backward()
