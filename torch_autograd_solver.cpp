@@ -3,8 +3,12 @@
 #include <iostream>
 
 /*
-  Suppose A is square matrix, solve A V = V W
-  
+  Suppose A is square matrix, solve A V = V W, where V is unitary and W is diagonal
+  Its differentiation gives dL/dA = V (dL/dW + F * (V^T dL/dV)) V^T, where F_{i,j, i \neq j} = 1/(W_i - W_j)
+
+  dA V + A dV = dV W + W dV
+  dA V + V W dC = V dC W + V dW   (define dC = V^-1 dV <-> dV = V dC)
+
  */
 // forked from pytorch 0.5
 // https://github.com/sethah/pytorch/blob/81b61db9219ffeb8fc0c8ab3abe0f0b5a7edf4f4/tools/autograd/templates/Functions.cpp#L1514
@@ -171,6 +175,9 @@ at::Tensor batch_symeig_backward(
     return gx;
 }
 
+/**
+   A
+ */
 std::tuple<at::Tensor, at::Tensor> generalized_symeig_backward(
     // backward variables
     const at::Tensor& grad_loss_wrt_eigenvalues, // [m]

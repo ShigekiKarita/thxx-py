@@ -75,9 +75,10 @@ def test_generalized_symeig_backward():
     assert gradcheck(S.GeneralizedSymeig(), (a, b), eps=1e-6, atol=1e-4)
 
 
-# test_symeig()
-# test_runtime()
-# test_gradcheck()
-# test_batch_symeig_forward()
-# test_batch_symeig_backward()
+# test_symeig() # need pytorch 0.5.0 or later
+test_runtime()
+test_gradcheck()
+test_batch_symeig_forward()
+test_batch_symeig_backward()
 test_generalized_symeig_forward()
+test_generalized_symeig_backward()

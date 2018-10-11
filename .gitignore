@@ -1,5 +1,6 @@
 *
 
+!torch_autograd_solver/
 !*.cpp
 !*.cu
 !*.py
