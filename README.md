@@ -1,4 +1,4 @@
-# thxp : pytorch experimental expansion
+# thxx : pytorch experimental expansion
 
 DONE
 
