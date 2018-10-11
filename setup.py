@@ -1,25 +1,39 @@
+import os
 from setuptools import setup
 from torch.utils.cpp_extension import CppExtension, BuildExtension
 
-from torch_autograd_solver import __version__
+from thxx import __version__
+
+conda = os.getenv("CONDA_PREFIX")
+if conda:
+    inc = [conda + "/include"]
+else:
+    inc = []
 
 setup(
-    name='torch_autograd_solver',
+    name='thxx',
     version=__version__,
-    description='autograd solver C++ implementation for pytorch',
-    url='https://github.com/ShigekiKarita/pytorch-autograd-solver',
+    description='various C++ extensions for pytorch',
+    url='https://github.com/ShigekiKarita/thxx',
     author='Shigeki Karita',
     author_email="shigekikarita@gmail.com",
     license='BSL-1.0',
     keywords='pytorch',
     ext_modules=[
         CppExtension(
-            'torch_autograd_solver_aten',
-            ['torch_autograd_solver.cpp'],
+            'thxx_autograd',
+            ['autograd.cpp'],
             extra_compile_args=["-fopenmp"]
-        )],
+        ),
+        CppExtension(
+            'thxx_backend',
+            ['backend.cpp'],
+            include_dirs=inc,
+            libraries=["cusolver", "cublas"]
+        )
+    ],
     cmdclass={'build_ext': BuildExtension},
-    packages=["torch_autograd_solver"],
+    packages=["thxx"],
     classifiers=[
         'Programming Language :: Python :: 3',
     ],

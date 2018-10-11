@@ -93,7 +93,7 @@ std::tuple<at::Tensor, at::Tensor> batch_symeig_forward(const at::Tensor& input,
         w.select(0, i).copy_(wi);
         v.select(0, i).copy_(vi);
     }
-    return {w, v};
+    return std::tuple<at::Tensor, at::Tensor> {w, v};
 }
 
 at::Tensor batch_symeig_backward(
@@ -211,7 +211,7 @@ std::tuple<at::Tensor, at::Tensor> generalized_symeig_backward(
 
     auto ga = at::empty_like(a);
     auto gb = at::empty_like(b);
-    return {a, b};
+    return std::tuple<at::Tensor, at::Tensor> {a, b};
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

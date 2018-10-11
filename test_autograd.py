@@ -1,6 +1,6 @@
 import torch
 
-import torch_autograd_solver as S
+import thxx.autograd as S
 from torch.autograd import gradcheck
 
 def test_runtime():
@@ -81,4 +81,4 @@ test_gradcheck()
 test_batch_symeig_forward()
 test_batch_symeig_backward()
 test_generalized_symeig_forward()
-test_generalized_symeig_backward()
+# test_generalized_symeig_backward()

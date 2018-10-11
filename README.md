@@ -1,15 +1,24 @@
-# pytorch autograd solver
+# thxp : pytorch experimental expansion
 
 DONE
 
-- symeig
-- batch_symeig
-- generalized_symeig
+- backend
+  - symeig
+  - batch_symeig
+  - generalized_symeig
+  - complex matmul
+  - batch_matinv
+
+- autograd
+  - symeig
+  - batch_symeig
+  - generalized_symeig
 
 TODO
 
 - batch_svd
-- batch_inv
+- batch/complex inv
+
 
 see `torch_autograd_solver_/__init__.py`
 
