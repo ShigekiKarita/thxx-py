@@ -1,6 +1,6 @@
 *
 
-!torch_autograd_solver/
+!thxx
 !*.cpp
 !*.cu
 !*.py
