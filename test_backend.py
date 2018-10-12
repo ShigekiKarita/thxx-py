@@ -88,43 +88,84 @@ def test_batch_matinv():
         torch.testing.assert_allclose(a[i].mm(ai[i]), torch.eye(a.shape[1], device=a.device))
 
 
-def test_complex_gemm():
+def test_complex_mm():
     for d in ["cpu", "cuda"]:
         if d == "cuda":
             if not torch.cuda.is_available():
                 continue
-            cgemm = thxx_backend_cuda.cublas_cgemm
+            cgemm = thxx_backend_cuda.cublas_complex_mm
         else:
-            cgemm = thxx_backend_cpu.mkl_cgemm
+            cgemm = thxx_backend_cpu.mkl_complex_mm
+        dev = torch.device(d)
+        for dtype in [torch.float32, torch.float64]:
+            ab = [
+                (torch.randn(4, 3, 2).to(dev),
+                 torch.randn(3, 2, 2).to(dev)),
+                (torch.randn(3, 4, 2).to(dev).transpose(0, 1),
+                 torch.randn(3, 2, 2).to(dev)),
+                (torch.randn(4, 3, 2).to(dev),
+                 torch.randn(2, 3, 2).to(dev).transpose(0, 1)),
+                (torch.randn(3, 4, 2).to(dev).transpose(0, 1),
+                 torch.randn(2, 3, 2).to(dev).transpose(0, 1)),
+            ]
+            for a, b in ab:
+                c = cgemm(a, b).cpu()
+                a = a.cpu()
+                b = b.cpu()
+                for i in range(c.shape[0]):
+                    for j in range(c.shape[1]):
+                        ai = a[i, :].t()
+                        bj = b[:, j].t()
+                        # ar * br - ai * bi
+                        cr = sum(ai[0] * bj[0] - ai[1] * bj[1])
+                        # ai * br + ar * bi
+                        ci = sum(ai[1] * bj[0] + ai[0] * bj[1])
+                        torch.testing.assert_allclose(c[i, j, 0], cr)
+                        torch.testing.assert_allclose(c[i, j, 1], ci)
+
+
+def test_batch_complex_mm():
+    for d in ["cpu", "cuda"]:
+        if d == "cuda":
+            if not torch.cuda.is_available():
+                continue
+            cgemm = thxx_backend_cuda.cublas_batch_complex_mm
+        else:
+            cgemm = thxx_backend_cpu.mkl_batch_complex_mm
         dev = torch.device(d)
 
-        ab = [
-            (torch.randn(4, 3, 2).to(dev),
-             torch.randn(3, 2, 2).to(dev)),
-            (torch.randn(3, 4, 2).to(dev).transpose(0, 1),
-             torch.randn(3, 2, 2).to(dev)),
-            (torch.randn(4, 3, 2).to(dev),
-             torch.randn(2, 3, 2).to(dev).transpose(0, 1)),
-            (torch.randn(3, 4, 2).to(dev).transpose(0, 1),
-             torch.randn(2, 3, 2).to(dev).transpose(0, 1)),
-        ]
-        for a, b in ab:
-            c = cgemm(a, b)
-            for i in range(c.shape[0]):
-                for j in range(c.shape[1]):
-                    ai = a[i, :].t()
-                    bj = b[:, j].t()
-                    # ar * br - ai * bi
-                    cr = sum(ai[0] * bj[0] - ai[1] * bj[1])
-                    # ai * br + ar * bi
-                    ci = sum(ai[1] * bj[0] + ai[0] * bj[1])
-                    torch.testing.assert_allclose(c[i, j, 0], cr)
-                    torch.testing.assert_allclose(c[i, j, 1], ci)
+        for dtype in [torch.float32, torch.float64]:
+            ab = [
+                (torch.randn(5, 4, 3, 2, device=dev, dtype=dtype),
+                 torch.randn(5, 3, 2, 2, device=dev, dtype=dtype)),
+                (torch.randn(5, 3, 4, 2, device=dev, dtype=dtype).transpose(1, 2),
+                 torch.randn(5, 3, 2, 2, device=dev, dtype=dtype)),
+                (torch.randn(5, 4, 3, 2, device=dev, dtype=dtype),
+                 torch.randn(5, 2, 3, 2, device=dev, dtype=dtype).transpose(1, 2)),
+                (torch.randn(5, 3, 4, 2, device=dev, dtype=dtype).transpose(1, 2),
+                 torch.randn(5, 2, 3, 2, device=dev, dtype=dtype).transpose(1, 2)),
+            ]
+            for a, b in ab:
+                c = cgemm(a, b).cpu()
+                a = a.cpu()
+                b = b.cpu()
+                for k in range(c.shape[0]):
+                    for i in range(c.shape[1]):
+                        for j in range(c.shape[2]):
+                            ai = a[k, i, :].t()
+                            bj = b[k, :, j].t()
+                            # ar * br - ai * bi
+                            cr = sum(ai[0] * bj[0] - ai[1] * bj[1])
+                            # ai * br + ar * bi
+                            ci = sum(ai[1] * bj[0] + ai[0] * bj[1])
+                            torch.testing.assert_allclose(c[k, i, j, 0], cr)
+                            torch.testing.assert_allclose(c[k, i, j, 1], ci)
 
 
 if __name__ == "__main__":
     # test_batch_eigh()
     # test_generalized_eigh()
-    # test_batch_matinv()
+    test_batch_matinv()
     # test_batch_svd()
-    test_complex_gemm()
+    test_complex_mm()
+    test_batch_complex_mm()
