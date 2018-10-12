@@ -5,6 +5,11 @@ TODO rewrite Function with @staticmethod and ctx
 import torch
 import thxx_autograd as A
 
+
+if torch.cuda.is_available():
+    import thxx_backend_cuda
+
+
 class BasicSymeig(torch.autograd.Function):
     """Basic (non-batched, non-generalized) eigensystem solver
 
@@ -55,14 +60,6 @@ class BasicSymeig(torch.autograd.Function):
         return A.symeig_backward(grad_w, grad_v, x, w, v, self.upper)
 
 
-def backend():
-    try:
-        import thxp_backend
-        return thxp_backend
-    except ImportError:
-        assert False, "need to run `pip install git+https://github.com/ShigekiKarita/pytorch-cusolver`"
-
-
 class BatchSymeig(torch.autograd.Function):
     def __init__(self, upper=True, tol=1e-7, max_sweeps=100):
         self.upper = upper
@@ -71,7 +68,8 @@ class BatchSymeig(torch.autograd.Function):
 
     def forward(self, input):
         if input.is_cuda:
-            w, V = backend().cusolver_batch_eigh(input, False, self.upper, self.tol, self.max_sweeps)
+            w, V = thxx_backend_cuda.cusolver_batch_eigh(
+                input, False, self.upper, self.tol, self.max_sweeps)
         else:
             w, V = A.batch_symeig_forward(input, self.upper)
         self.save_for_backward(input, w, V)
@@ -103,7 +101,7 @@ class GeneralizedSymeig(torch.autograd.Function):
         from scipy.linalg import eigh
         assert a.is_cuda == b.is_cuda
         if a.is_cuda:
-            w, V = backend().cusolver_generalized_eigh(a, False, b, False,
+            w, V = thxx_backend_cuda.cusolver_generalized_eigh(a, False, b, False,
                                                             self.use_jacob,
                                                             self.tol, self.max_sweeps)
         else:

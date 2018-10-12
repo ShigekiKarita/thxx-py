@@ -44,6 +44,7 @@ def test_batch_symeig_forward():
         torch.testing.assert_allclose(ws[i], w)
         torch.testing.assert_allclose(vs[i], v)
 
+
 def test_batch_symeig_backward():
     input = torch.randn(2, 3, 3).double()
     input1 = input.clone()
