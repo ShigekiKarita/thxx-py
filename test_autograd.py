@@ -22,7 +22,7 @@ def test_gradcheck():
         assert gradcheck(S.BasicSymeig(upper=upper), (input,), eps=1e-6, atol=1e-4)
 
 def test_symeig():
-    if torch.__version__.startswith("0.4"):
+    if not torch.__version__.startswith("1.0"):
         return
     # NOTE need pytorch 0.5.0 or 1.0
     a = torch.tensor([[ 1.96,  0.00,  0.00,  0.00,  0.00],
