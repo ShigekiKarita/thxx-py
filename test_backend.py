@@ -1,27 +1,25 @@
 # coding: utf-8
 import numpy
 import torch
-import thxx_backend_cpu
-if torch.cuda.is_available():
-    import thxx_backend_cuda
+import thxx
 
 
 def test_batch_eigh():
     if not torch.cuda.is_available():
         return
-    A = torch.rand(2, 5, 5).cuda()
-    A = A.transpose(1, 2).matmul(A)
-    w, V = thxx_backend_cuda.cusolver_batch_eigh(A,
-                                 False,
-                                 True,
-                                 1e-7,
-                                 100,
-                                 False)
-    for i in range(A.shape[0]):
-        a = A[i]
-        e = V[i].t().matmul(w[i].diag()).matmul(V[i])
-        torch.testing.assert_allclose(a, e)
-
+    for dtype in [torch.float32, torch.float64]:
+        A = torch.rand(2, 5, 5, dtype=dtype, device=torch.device("cuda"))
+        A = A.transpose(1, 2).matmul(A)
+        w, V = thxx.backend.batch_eigh(A,
+                                       False,
+                                       True,
+                                       1e-7,
+                                       100,
+                                       False)
+        for i in range(A.shape[0]):
+            a = A[i]
+            e = V[i].t().matmul(w[i].diag()).matmul(V[i])
+            torch.testing.assert_allclose(a, e)
 
 def test_generalized_eigh():
     if not torch.cuda.is_available():
@@ -42,7 +40,7 @@ def test_generalized_eigh():
     w_expect = torch.cuda.FloatTensor([0.158660256604, 0.370751508101882, 0.6])
     for upper in [True, False]:
         for jacob in [True, False]:
-            w, V, L = thxx_backend_cuda.cusolver_generalized_eigh(a, False, b, False, upper, jacob, 1e-7, 100)
+            w, V, L = thxx.backend.generalized_eigh(a, False, b, False, upper, jacob, 1e-7, 100)
             torch.testing.assert_allclose(w, w_expect)
             torch.testing.assert_allclose(V.mm(b).mm(V.t()), torch.eye(a.shape[0], device=a.device))
             for i in range(3):
@@ -63,7 +61,7 @@ def test_batch_svd():
     s_expect = torch.cuda.FloatTensor(
         [[2.6180, 0.382],
          [9.4721, 0.5279]])
-    U, s, V = thxx_backend_cuda.cusolver_batch_svd(A, False, 0.0, 100)
+    U, s, V = thxx.backend.batch_svd(A, False, 0.0, 100)
 
     # FIXME not matched
     print(s_expect)
@@ -82,10 +80,33 @@ def test_batch_svd():
 def test_batch_matinv():
     if not torch.cuda.is_available():
         return
-    a = torch.randn(2, 3, 3).cuda()
-    ai = thxx_backend_cuda.cusolver_batch_matinv(a)
-    for i in range(a.shape[0]):
-        torch.testing.assert_allclose(a[i].mm(ai[i]), torch.eye(a.shape[1], device=a.device))
+
+    for dtype in [torch.float32, torch.float64]:
+        _a = torch.randn(2, 3, 3, dtype=dtype, device=torch.device("cuda"))
+        for a in [_a, _a.transpose(1, 2)]:
+            ai = thxx.backend.batch_matinv(a)
+            for i in range(a.shape[0]):
+                torch.testing.assert_allclose(
+                    a[i].mm(ai[i]),
+                    torch.eye(a.shape[1], dtype=dtype, device=a.device))
+
+
+def test_batch_complex_matinv():
+    if not torch.cuda.is_available():
+        return
+
+    for dtype in [torch.float32, torch.float64]:
+        _a = torch.randn(2, 3, 3, 2, dtype=dtype, device=torch.device("cuda"))
+        for a in [_a, _a.transpose(1, 2)]:
+            ai = thxx.backend.batch_complex_matinv(a)
+            id = thxx.backend.batch_complex_mm(a, ai)
+            for i in range(a.shape[0]):
+                torch.testing.assert_allclose(
+                    id[i, :, :, 0],
+                    torch.eye(a.shape[1], dtype=dtype, device=a.device))
+                torch.testing.assert_allclose(
+                    id[i, :, :, 1],
+                    torch.zeros(a.shape[1], dtype=dtype, device=a.device))
 
 
 def test_complex_mm():
@@ -93,23 +114,20 @@ def test_complex_mm():
         if d == "cuda":
             if not torch.cuda.is_available():
                 continue
-            cgemm = thxx_backend_cuda.cublas_complex_mm
-        else:
-            cgemm = thxx_backend_cpu.mkl_complex_mm
         dev = torch.device(d)
         for dtype in [torch.float32, torch.float64]:
             ab = [
-                (torch.randn(4, 3, 2).to(dev),
-                 torch.randn(3, 2, 2).to(dev)),
-                (torch.randn(3, 4, 2).to(dev).transpose(0, 1),
-                 torch.randn(3, 2, 2).to(dev)),
-                (torch.randn(4, 3, 2).to(dev),
-                 torch.randn(2, 3, 2).to(dev).transpose(0, 1)),
-                (torch.randn(3, 4, 2).to(dev).transpose(0, 1),
-                 torch.randn(2, 3, 2).to(dev).transpose(0, 1)),
+                (torch.randn(4, 3, 2, device=dev, dtype=dtype),
+                 torch.randn(3, 2, 2, device=dev, dtype=dtype)),
+                (torch.randn(3, 4, 2, device=dev, dtype=dtype).transpose(0, 1),
+                 torch.randn(3, 2, 2, device=dev, dtype=dtype)),
+                (torch.randn(4, 3, 2, device=dev, dtype=dtype),
+                 torch.randn(2, 3, 2, device=dev, dtype=dtype).transpose(0, 1)),
+                (torch.randn(3, 4, 2, device=dev, dtype=dtype).transpose(0, 1),
+                 torch.randn(2, 3, 2, device=dev, dtype=dtype).transpose(0, 1)),
             ]
             for a, b in ab:
-                c = cgemm(a, b).cpu()
+                c = thxx.backend.complex_mm(a, b).cpu()
                 a = a.cpu()
                 b = b.cpu()
                 for i in range(c.shape[0]):
@@ -129,11 +147,7 @@ def test_batch_complex_mm():
         if d == "cuda":
             if not torch.cuda.is_available():
                 continue
-            cgemm = thxx_backend_cuda.cublas_batch_complex_mm
-        else:
-            cgemm = thxx_backend_cpu.mkl_batch_complex_mm
         dev = torch.device(d)
-
         for dtype in [torch.float32, torch.float64]:
             ab = [
                 (torch.randn(5, 4, 3, 2, device=dev, dtype=dtype),
@@ -146,7 +160,7 @@ def test_batch_complex_mm():
                  torch.randn(5, 2, 3, 2, device=dev, dtype=dtype).transpose(1, 2)),
             ]
             for a, b in ab:
-                c = cgemm(a, b).cpu()
+                c = thxx.backend.batch_complex_mm(a, b).cpu()
                 a = a.cpu()
                 b = b.cpu()
                 for k in range(c.shape[0]):
@@ -163,9 +177,15 @@ def test_batch_complex_mm():
 
 
 if __name__ == "__main__":
-    # test_batch_eigh()
-    # test_generalized_eigh()
+    # wip
+    test_batch_svd()
+
+    # float only
+    test_generalized_eigh()
+
+    # float/double done
+    test_batch_eigh()
     test_batch_matinv()
-    # test_batch_svd()
+    test_batch_complex_matinv()
     test_complex_mm()
     test_batch_complex_mm()

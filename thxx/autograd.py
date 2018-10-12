@@ -3,11 +3,8 @@ TODO rewrite Function with @staticmethod and ctx
 """
 
 import torch
+import thxx
 import thxx_autograd as A
-
-
-if torch.cuda.is_available():
-    import thxx_backend_cuda
 
 
 class BasicSymeig(torch.autograd.Function):
@@ -68,7 +65,7 @@ class BatchSymeig(torch.autograd.Function):
 
     def forward(self, input):
         if input.is_cuda:
-            w, V = thxx_backend_cuda.cusolver_batch_eigh(
+            w, V = thxx.backend.batch_eigh(
                 input, False, self.upper, self.tol, self.max_sweeps)
         else:
             w, V = A.batch_symeig_forward(input, self.upper)
@@ -101,8 +98,8 @@ class GeneralizedSymeig(torch.autograd.Function):
         from scipy.linalg import eigh
         assert a.is_cuda == b.is_cuda
         if a.is_cuda:
-            w, V = thxx_backend_cuda.cusolver_generalized_eigh(a, False, b, False,
-                                                            self.use_jacob,
+            w, V = thxx.backend.generalized_eigh(a, False, b, False,
+                                                 self.use_jacob,
                                                             self.tol, self.max_sweeps)
         else:
             w, V = eigh(a.detach().numpy(), b.detach().numpy(), lower=not self.upper)

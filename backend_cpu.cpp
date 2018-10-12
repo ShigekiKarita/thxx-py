@@ -7,12 +7,14 @@ namespace thxx
     {
         at::Tensor complex_mm(const at::Tensor& a, const at::Tensor& b)
         {
-            AT_CHECK(a.dtype() == at::kFloat, "only float is supported");
+            AT_CHECK(a.dtype() == at::kFloat || a.dtype() == at::kDouble,
+                     "only float and double are supported");
+            AT_CHECK(a.dtype() == b.dtype(), "a.dtype() != b.dtype()");
+
             AT_CHECK(a.dim() == 3, "3-dim complex matrix is supported but a.dim() == ", a.dim());
             AT_CHECK(a.size(2) == 2, "complex matrix a should be a.size(2) == 2 but ", a.size(2));
             AT_CHECK(a.stride(2) == 1, "complex matrix a should be a.stride(2) == 1 but ", a.stride(2));
 
-            AT_CHECK(b.dtype() == at::kFloat, "only float is supported");
             AT_CHECK(b.dim() == 3, "3-dim complex matrix is supported but b.dim() == ", b.dim());
             AT_CHECK(b.size(2) == 2, "complex matrix b should be a.size(2) == 2 but ", b.size(2));
             AT_CHECK(b.stride(2) == 1, "complex matrix a should be b.stride(2) == 1 but ", b.stride(2));
@@ -21,10 +23,7 @@ namespace thxx
                      "a.size(1) {", a.size(1), "} != b.size(0) {", b.size(0), "}");
             AT_CHECK(!a.is_cuda() && !b.is_cuda(), "device is not matched");
 
-            // TODO optional arg
             auto c = at::empty({a.size(0), b.size(1), 2}, a.type());
-            const float alpha[2] = {1.0, 0.0};
-            const float beta[2] = {0.0, 0.0};
 
             const auto transa = a.stride(1) == 2;
             const auto transb = b.stride(1) == 2;
@@ -36,16 +35,39 @@ namespace thxx
             int ldb = b.stride(transb ? 0 : 1) / 2;
             int lda = a.stride(transa ? 0 : 1) / 2;
             int ldc = c.stride(0) / 2;
-            // I prefer C++ interface instead of CBLAS
-            cgemm(
-                &tb, &ta,
-                &m, &n, &k,
-                (MKL_Complex8*) &alpha,
-                (const MKL_Complex8*) b.data_ptr(), &ldb,
-                (const MKL_Complex8*) a.data_ptr(), &lda,
-                (MKL_Complex8*) &beta,
-                (MKL_Complex8*) c.data_ptr(), &ldc
-                );
+
+            if (a.dtype() == at::kFloat)
+            {
+                const float alpha[2] = {1.0, 0.0};
+                const float beta[2] = {0.0, 0.0};
+                cgemm(
+                    &tb, &ta,
+                    &m, &n, &k,
+                    (MKL_Complex8*) &alpha,
+                    (const MKL_Complex8*) b.data_ptr(), &ldb,
+                    (const MKL_Complex8*) a.data_ptr(), &lda,
+                    (MKL_Complex8*) &beta,
+                    (MKL_Complex8*) c.data_ptr(), &ldc
+                    );
+            }
+            else if (a.dtype() == at::kDouble)
+            {
+                const double alpha[2] = {1.0, 0.0};
+                const double beta[2] = {0.0, 0.0};
+                zgemm(
+                    &tb, &ta,
+                    &m, &n, &k,
+                    (MKL_Complex16*) &alpha,
+                    (const MKL_Complex16*) b.data_ptr(), &ldb,
+                    (const MKL_Complex16*) a.data_ptr(), &lda,
+                    (MKL_Complex16*) &beta,
+                    (MKL_Complex16*) c.data_ptr(), &ldc
+                    );
+            }
+            else
+            {
+                AT_CHECK(false);
+            }
             return c;
         }
 
@@ -53,6 +75,8 @@ namespace thxx
         {
             AT_CHECK(a.dtype() == at::kFloat || a.dtype() == at::kDouble,
                      "only float and double are supported");
+            AT_CHECK(a.dtype() == b.dtype(), "a.dtype() != b.dtype()");
+
             AT_CHECK(a.dim() == 4, "4-dim complex matrix is supported but a.dim() == ", a.dim());
             AT_CHECK(a.size(3) == 2, "complex matrix a should be a.size(3) == 2 but ", a.size(3));
             AT_CHECK(a.stride(3) == 1, "complex matrix a should be a.stride(3) == 1 but ", a.stride(3));
@@ -61,7 +85,6 @@ namespace thxx
             AT_CHECK(b.size(3) == 2, "complex matrix a should be b.size(3) == 2 but ", b.size(3));
             AT_CHECK(b.stride(3) == 1, "complex matrix a should be b.stride(3) == 1 but ", b.stride(3));
 
-            AT_CHECK(a.dtype() == b.dtype(), "a.dtype() != b.dtype()");
             AT_CHECK(a.size(0) == b.size(0), "complex matrix is not matched:",
                      "a.size(0) {", a.size(0), "} != b.size(0) {", b.size(0), "}");
             AT_CHECK(a.size(2) == b.size(1), "complex matrix is not matched:",
@@ -135,15 +158,15 @@ namespace thxx
             }
             return c;
         }
-}
-}
+    } // namespace mkl
+} // namespace thxx
 
 
 // generate wrappers
 // FIXME do not use legacy preprocessor macro
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("mkl_complex_mm", &thxx::mkl::complex_mm,
+    m.def("complex_mm", &thxx::mkl::complex_mm,
           "MKL based complex matrix multiplication implementation");
-    m.def("mkl_batch_complex_mm", &thxx::mkl::batch_complex_mm,
+    m.def("batch_complex_mm", &thxx::mkl::batch_complex_mm,
           "MKL based batch complex matrix multiplication implementation");
 }

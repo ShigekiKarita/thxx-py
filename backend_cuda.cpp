@@ -39,21 +39,6 @@ namespace thxx
         return {ptr, cudaFree};
     }
 
-    cuda_ptr<void*> to_batch_pointers(at::Tensor a) {
-        const auto batch_size = a.size(0);
-        std::vector<void*> a_pointers;
-        a_pointers.reserve(batch_size);
-        for (int i = 0; i < batch_size; ++i)
-        {
-            a_pointers.push_back(a.select(0, i).data_ptr());
-        }
-        auto dev_a_ptrs = unique_cuda_allocate<void*>(batch_size);
-        auto status_memcpy = cudaMemcpy(dev_a_ptrs.get(), a_pointers.data(),
-                                        sizeof(void*) * batch_size, cudaMemcpyHostToDevice);
-        AT_CHECK(cudaSuccess == status_memcpy);
-        return std::move(dev_a_ptrs);
-    }
-
     namespace cublas
     {
         cublasHandle_t getCurrentCUDABlasHandle()
@@ -99,6 +84,22 @@ namespace thxx
             return "<unknown>";
         }
 
+        cuda_ptr<void*> to_batch_pointers(at::Tensor a)
+        {
+            const auto batch_size = a.size(0);
+            std::vector<void*> a_pointers;
+            a_pointers.reserve(batch_size);
+            for (int i = 0; i < batch_size; ++i)
+            {
+                a_pointers.push_back(a.select(0, i).data_ptr());
+            }
+            auto dev_a_ptrs = unique_cuda_allocate<void*>(batch_size);
+            auto status_memcpy = cudaMemcpy(dev_a_ptrs.get(), a_pointers.data(),
+                                            sizeof(void*) * batch_size, cudaMemcpyHostToDevice);
+            AT_CHECK(cudaSuccess == status_memcpy);
+            return std::move(dev_a_ptrs);
+        }
+
         void test_cucomplex()
         {
             static_assert(sizeof(cuComplex) == sizeof(float[2]), "unexpected cuComplex size");
@@ -112,14 +113,13 @@ namespace thxx
         {
             // TODO optional arg
             at::Tensor c={};
-            const cuComplex alpha = {1.0, 0.0};
-            const cuComplex beta = {0.0, 0.0};
-            AT_CHECK(a.dtype() == at::kFloat, "only float is supported");
+            AT_CHECK(a.dtype() == at::kFloat || a.dtype() == at::kDouble, "only float and double are supported");
+            AT_CHECK(b.dtype() == a.dtype(), "type mismatch between a and b");
+
             AT_CHECK(a.dim() == 3, "3-dim complex matrix is supported but a.dim() == ", a.dim());
             AT_CHECK(a.size(2) == 2 && a.stride(2) == 1,
                      "complex matrix a should be a.size(2) == 2 but ", a.size(2));
 
-            AT_CHECK(b.dtype() == at::kFloat, "only float is supported");
             AT_CHECK(b.dim() == 3, "3-dim complex matrix is supported but b.dim() == ", b.dim());
             AT_CHECK(b.size(2) == 2 && b.stride(2) == 1,
                      "complex matrix b should be a.size(2) == 2 but ", b.size(2));
@@ -136,18 +136,44 @@ namespace thxx
             // NOTE: cublas only supports fortran order (transposed A x B -> B^T x A^T)
             const auto transa = a.stride(1) == 2;
             const auto transb = b.stride(1) == 2;
-            auto status = cublasCgemm(
-                getCurrentCUDABlasHandle(),
-                transb ? CUBLAS_OP_N : CUBLAS_OP_T,
-                transa ? CUBLAS_OP_N : CUBLAS_OP_T,
-                b.size(1), a.size(0), b.size(0),
-                &alpha,
-                (const cuComplex*) b.data_ptr(), b.stride(transb ? 0 : 1) / 2,
-                (const cuComplex*) a.data_ptr(), a.stride(transa ? 0 : 1) / 2,
-                &beta,
-                (cuComplex*) c.data_ptr(), c.stride(0) / 2
-                );
-            AT_CHECK(status == CUBLAS_STATUS_SUCCESS, cudaGetErrorEnum(status));
+            if (a.dtype() == at::kFloat)
+            {
+                const cuComplex alpha = {1.0, 0.0};
+                const cuComplex beta = {0.0, 0.0};
+                auto status = cublasCgemm(
+                    getCurrentCUDABlasHandle(),
+                    transb ? CUBLAS_OP_N : CUBLAS_OP_T,
+                    transa ? CUBLAS_OP_N : CUBLAS_OP_T,
+                    b.size(1), a.size(0), b.size(0),
+                    &alpha,
+                    (const cuComplex*) b.data_ptr(), b.stride(transb ? 0 : 1) / 2,
+                    (const cuComplex*) a.data_ptr(), a.stride(transa ? 0 : 1) / 2,
+                    &beta,
+                    (cuComplex*) c.data_ptr(), c.stride(0) / 2
+                    );
+                AT_CHECK(status == CUBLAS_STATUS_SUCCESS, cudaGetErrorEnum(status));
+            }
+            else if (a.dtype() == at::kDouble)
+            {
+                const cuDoubleComplex alpha = {1.0, 0.0};
+                const cuDoubleComplex beta = {0.0, 0.0};
+                auto status = cublasZgemm(
+                    getCurrentCUDABlasHandle(),
+                    transb ? CUBLAS_OP_N : CUBLAS_OP_T,
+                    transa ? CUBLAS_OP_N : CUBLAS_OP_T,
+                    b.size(1), a.size(0), b.size(0),
+                    &alpha,
+                    (const cuDoubleComplex*) b.data_ptr(), b.stride(transb ? 0 : 1) / 2,
+                    (const cuDoubleComplex*) a.data_ptr(), a.stride(transa ? 0 : 1) / 2,
+                    &beta,
+                    (cuDoubleComplex*) c.data_ptr(), c.stride(0) / 2
+                    );
+                AT_CHECK(status == CUBLAS_STATUS_SUCCESS, cudaGetErrorEnum(status));
+            }
+            else
+            {
+                AT_CHECK(false);
+            }
             return c;
         }
 
@@ -231,34 +257,115 @@ namespace thxx
             return c;
         }
 
-        // batch_matinv
-        at::Tensor batch_matinv(const at::Tensor& a) {
+        at::Tensor batch_matinv(const at::Tensor& a)
+        {
             AT_CHECK(a.is_cuda(), "only cuda tensor is supported");
-            AT_CHECK(a.dtype() == at::kFloat, "only float is supported");
+            AT_CHECK(a.dim() == 3, "batch matrix should be a.dim() == 3 but ", a.dim());
+            AT_CHECK(a.dtype() == at::kFloat || a.dtype() == at::kDouble, "only float or double is supported");
+            AT_CHECK(a.size(1) == a.size(2), "a is not square");
 
+            // TODO wrap getrf/getri inv for large pinv
             const auto batch_size = a.size(0);
             const auto m = a.size(1);
             AT_CHECK(m <= 32, "matrix row should be <= 32");
             const auto n = a.size(2);
             AT_CHECK(n == m, "should be col == row");
-            const auto lda = a.stride(1);
-            auto inv = at::empty_like(a); // ({batch_size, n, n}, a.type());
+            const auto trans = a.stride(2) == 1;
+            const auto lda = a.stride(trans ? 1 : 2);
+            auto inv = at::empty_like(a);
             auto lda_inv = inv.stride(1);
             auto info_ptr = unique_cuda_allocate<int>(batch_size);
             auto dev_a_ptrs = to_batch_pointers(a);
             auto dev_inv_ptrs = to_batch_pointers(inv);
-            auto status = cublasSmatinvBatched(
-                getCurrentCUDABlasHandle(),
-                n,
-                const_cast<const float**>(reinterpret_cast<float**>(dev_a_ptrs.get())),
-                lda,
-                reinterpret_cast<float**>(dev_inv_ptrs.get()),
-                lda_inv,
-                info_ptr.get(),
-                batch_size);
-            AT_CHECK(status == CUBLAS_STATUS_SUCCESS);
-            return inv;
+
+            if (a.dtype() == at::kFloat)
+            {
+                auto status = cublasSmatinvBatched(
+                    getCurrentCUDABlasHandle(),
+                    n,
+                    const_cast<const float**>(reinterpret_cast<float**>(dev_a_ptrs.get())),
+                    lda,
+                    reinterpret_cast<float**>(dev_inv_ptrs.get()),
+                    lda_inv,
+                    info_ptr.get(),
+                    batch_size);
+                AT_CHECK(status == CUBLAS_STATUS_SUCCESS);
+            }
+            else if (a.dtype() == at::kDouble)
+            {
+                auto status = cublasDmatinvBatched(
+                    getCurrentCUDABlasHandle(),
+                    n,
+                    const_cast<const double**>(reinterpret_cast<double**>(dev_a_ptrs.get())),
+                    lda,
+                    reinterpret_cast<double**>(dev_inv_ptrs.get()),
+                    lda_inv,
+                    info_ptr.get(),
+                    batch_size);
+                AT_CHECK(status == CUBLAS_STATUS_SUCCESS);
+            }
+            else
+            {
+                AT_CHECK(false);
+            }
+            return trans ? inv : inv.transpose(1, 2);
         }
+
+        at::Tensor batch_complex_matinv(const at::Tensor& a)
+        {
+            AT_CHECK(a.is_cuda(), "only cuda tensor is supported");
+            AT_CHECK(a.dim() == 4, "batch complex matrix should be a.dim() == 4 but ", a.dim());
+            AT_CHECK(a.dtype() == at::kFloat || a.dtype() == at::kDouble, "only float or double is supported");
+            AT_CHECK(a.size(1) == a.size(2), "a is not square");
+            AT_CHECK(a.size(3) == 2, "a.size(3) should be 2 but ", a.size(3));
+            AT_CHECK(a.stride(3) == 1, "a.stride(3) should be 1 but ", a.stride(3))
+
+            // TODO wrap getrf/getri inv for large pinv
+            const auto batch_size = a.size(0);
+            const auto m = a.size(1);
+            AT_CHECK(m <= 32, "matrix row should be <= 32");
+            const auto n = a.size(2);
+            const auto trans = a.stride(2) == 2;
+            const auto lda = a.stride(trans ? 1 : 2) / 2;
+            auto inv = at::empty_like(a);
+            auto lda_inv = inv.stride(1) / 2;
+            auto info_ptr = unique_cuda_allocate<int>(batch_size);
+            auto dev_a_ptrs = to_batch_pointers(a);
+            auto dev_inv_ptrs = to_batch_pointers(inv);
+
+            if (a.dtype() == at::kFloat)
+            {
+                auto status = cublasCmatinvBatched(
+                    getCurrentCUDABlasHandle(),
+                    n,
+                    const_cast<const cuComplex**>(reinterpret_cast<cuComplex**>(dev_a_ptrs.get())),
+                    lda,
+                    reinterpret_cast<cuComplex**>(dev_inv_ptrs.get()),
+                    lda_inv,
+                    info_ptr.get(),
+                    batch_size);
+                AT_CHECK(status == CUBLAS_STATUS_SUCCESS);
+            }
+            else if (a.dtype() == at::kDouble)
+            {
+                auto status = cublasZmatinvBatched(
+                    getCurrentCUDABlasHandle(),
+                    n,
+                    const_cast<const cuDoubleComplex**>(reinterpret_cast<cuDoubleComplex**>(dev_a_ptrs.get())),
+                    lda,
+                    reinterpret_cast<cuDoubleComplex**>(dev_inv_ptrs.get()),
+                    lda_inv,
+                    info_ptr.get(),
+                    batch_size);
+                AT_CHECK(status == CUBLAS_STATUS_SUCCESS);
+            }
+            else
+            {
+                AT_CHECK(false);
+            }
+            return trans ? inv : inv.transpose(1, 2);
+        }
+
 
         // batch_getrf
         // batch_getrs
@@ -305,7 +412,7 @@ namespace thxx
             // https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/cuda/CUDAContext.h
 
             AT_CHECK(a.is_cuda(), "only cuda tensor is supported");
-            AT_CHECK(a.dtype() == at::kFloat, "only float is supported");
+            AT_CHECK(a.dtype() == at::kFloat || a.dtype() == at::kDouble, "only float/double is supported");
             AT_CHECK(a.dim() == 3, "3-dim batch matrix is supported");
             AT_CHECK(a.size(1) == a.size(2), "only symmetric matrix is supported");
             // initialization
@@ -317,8 +424,8 @@ namespace thxx
             auto w = at::empty({a.size(0), a.size(2)}, a.type());
             auto V = in_place ? a.contiguous() : a.clone();
             auto lda = V.stride(1);
-            auto d_V = V.data<float>();
-            auto d_W = w.data<float>();
+            auto d_V = V.data_ptr();
+            auto d_W = w.data_ptr();
             auto uplo = use_lower ? CUBLAS_FILL_MODE_LOWER : CUBLAS_FILL_MODE_UPPER;
 
             // configure
@@ -333,45 +440,203 @@ namespace thxx
             /* disable sorting */
             status = cusolverDnXsyevjSetSortEig(syevj_params, sort_eig);
             AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
-
-            // FIXME use at::Tensor buffer from arg instead
-            // query working space of syevjBatched
-            int lwork;
-            status = cusolverDnSsyevjBatched_bufferSize(
-                handle_ptr.get(),
-                CUSOLVER_EIG_MODE_VECTOR,
-                uplo,
-                m,
-                d_V,
-                lda,
-                d_W,
-                &lwork,
-                syevj_params,
-                batch_size
-                );
-            AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
-            auto work_ptr = unique_cuda_allocate<float>(lwork);
             auto info_ptr = unique_cuda_allocate<int>(batch_size);
 
-            // compute eigenvalues/vectors
-            status = cusolverDnSsyevjBatched(
-                handle_ptr.get(),
-                CUSOLVER_EIG_MODE_VECTOR,
-                uplo,
-                m,
-                d_V,
-                lda,
-                d_W,
-                work_ptr.get(),
-                lwork,
-                info_ptr.get(),
-                syevj_params,
-                batch_size
-                );
+            // query working space of syevjBatched
+            if (a.dtype() == at::kFloat)
+            {
+                int lwork;
+                status = cusolverDnSsyevjBatched_bufferSize(
+                    handle_ptr.get(),
+                    CUSOLVER_EIG_MODE_VECTOR,
+                    uplo,
+                    m,
+                    (float*) d_V,
+                    lda,
+                    (float*) d_W,
+                    &lwork,
+                    syevj_params,
+                    batch_size
+                    );
+                AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+                auto work_ptr = unique_cuda_allocate<float>(lwork);
+                status = cusolverDnSsyevjBatched(
+                    handle_ptr.get(),
+                    CUSOLVER_EIG_MODE_VECTOR,
+                    uplo,
+                    m,
+                    (float*) d_V,
+                    lda,
+                    (float*) d_W,
+                    work_ptr.get(),
+                    lwork,
+                    info_ptr.get(),
+                    syevj_params,
+                    batch_size
+                    );
+                AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+            }
+            else if (a.dtype() == at::kDouble)
+            {
+                int lwork;
+                status = cusolverDnDsyevjBatched_bufferSize(
+                    handle_ptr.get(),
+                    CUSOLVER_EIG_MODE_VECTOR,
+                    uplo,
+                    m,
+                    (double*) d_V,
+                    lda,
+                    (double*) d_W,
+                    &lwork,
+                    syevj_params,
+                    batch_size
+                    );
+                AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+                auto work_ptr = unique_cuda_allocate<double>(lwork);
+                status = cusolverDnDsyevjBatched(
+                    handle_ptr.get(),
+                    CUSOLVER_EIG_MODE_VECTOR,
+                    uplo,
+                    m,
+                    (double*) d_V,
+                    lda,
+                    (double*) d_W,
+                    work_ptr.get(),
+                    lwork,
+                    info_ptr.get(),
+                    syevj_params,
+                    batch_size
+                    );
+                AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+            }
+            else
+            {
+                AT_CHECK(false);
+            }
             check_jacobi(info_ptr.get(), batch_size);
-            AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
             return std::make_tuple(w, V);
         }
+
+        std::tuple<at::Tensor, at::Tensor> batch_complex_symmetric_eigenvalue_solve(
+            at::Tensor a, bool in_place=false, bool use_lower=true,
+            double tol=1e-7, int max_sweeps=15, bool sort_eig=false)
+        {
+            // TODO use singleton handler instead of ondemand handle
+            // TODO check cutorch or ATen does not handle cusolver
+            // https://github.com/torch/cutorch/blob/master/lib/THC/THCGeneral.h.in
+            // https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/cuda/CUDAContext.h
+
+            AT_CHECK(a.is_cuda(), "only cuda tensor is supported");
+            AT_CHECK(a.dtype() == at::kFloat || a.dtype() == at::kDouble, "only float/double is supported");
+            AT_CHECK(a.dim() == 4, "only 4-dim batch complex matrix is supported");
+            AT_CHECK(a.size(3) == 2, "complex dim should be a.size(3) == 2 but ", a.size(3));
+            AT_CHECK(a.stride(3) == 1, "complex dim=3 is not contiguous");
+            AT_CHECK(a.size(1) == a.size(2), "only symmetric matrix is supported");
+            // initialization
+            auto handle_ptr = unique_allocate(cusolverDnCreate, cusolverDnDestroy);
+            // TODO use non blocking stream?
+            auto batch_size = a.size(0);
+            auto m = a.size(2);
+            AT_CHECK(m <= 32, "matrix row/col should be <= 32");
+            auto w = at::empty({m, m}, a.type());
+            auto V = in_place ? a.contiguous() : a.clone();
+            auto lda = V.stride(1) / 2;
+            auto d_V = V.data_ptr();
+            auto d_W = w.data_ptr();
+            auto uplo = use_lower ? CUBLAS_FILL_MODE_LOWER : CUBLAS_FILL_MODE_UPPER;
+
+            // configure
+            auto param_ptr = unique_allocate(cusolverDnCreateSyevjInfo, cusolverDnDestroySyevjInfo);
+            auto syevj_params = param_ptr.get();
+            /* default value of tolerance is machine zero */
+            auto status = cusolverDnXsyevjSetTolerance(syevj_params, tol);
+            AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+            /* default value of max. sweeps is 100 */
+            status = cusolverDnXsyevjSetMaxSweeps(syevj_params, max_sweeps);
+            AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+            /* disable sorting */
+            status = cusolverDnXsyevjSetSortEig(syevj_params, sort_eig);
+            AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+            auto info_ptr = unique_cuda_allocate<int>(batch_size);
+
+            /* FIXME
+            // query working space of syevjBatched
+            if (a.dtype() == at::kFloat)
+            {
+                int lwork;
+                status = cusolverDnCgesvdjBatched_bufferSize(
+                    handle_ptr.get(),
+                    CUSOLVER_EIG_MODE_VECTOR,
+                    uplo,
+                    m,
+                    (cuComplex*) d_V,
+                    lda,
+                    (float*) d_W,
+                    ldv,
+                    &lwork,
+                    syevj_params,
+                    batch_size
+                    );
+                AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+                auto work_ptr = unique_cuda_allocate<cuComplex>(lwork);
+                status = cusolverDnCgesvdjBatched(
+                    handle_ptr.get(),
+                    CUSOLVER_EIG_MODE_VECTOR,
+                    uplo,
+                    m,
+                    (cuComplex*) d_V,
+                    lda,
+                    (float*) d_W,
+                    work_ptr.get(),
+                    lwork,
+                    info_ptr.get(),
+                    syevj_params,
+                    batch_size
+                    );
+                AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+            }
+            else if (a.dtype() == at::kDouble)
+            {
+                int lwork;
+                status = cusolverDnZgesvdjBatched_bufferSize(
+                    handle_ptr.get(),
+                    CUSOLVER_EIG_MODE_VECTOR,
+                    uplo,
+                    m,
+                    (cuDoubleComplex*) d_V,
+                    lda,
+                    (double*) d_W,
+                    &lwork,
+                    syevj_params,
+                    batch_size
+                    );
+                AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+                auto work_ptr = unique_cuda_allocate<cuDoubleComplex>(lwork);
+                status = cusolverDnZgesvdjBatched(
+                    handle_ptr.get(),
+                    CUSOLVER_EIG_MODE_VECTOR,
+                    uplo,
+                    m,
+                    (cuDoubleComplex*) d_V,
+                    lda,
+                    (double*) d_W,
+                    work_ptr.get(),
+                    lwork,
+                    info_ptr.get(),
+                    syevj_params,
+                    batch_size
+                    );
+                AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+            }
+            else
+            {
+                AT_CHECK(false);
+            }
+            */
+            check_jacobi(info_ptr.get(), batch_size);
+            return std::make_tuple(w, V);
+        }
+
 
         // solve AV = wBV  a.k.a. syevj, where A (m, m), B (m, m), V (m, m), w (m)
         // see also https://docs.nvidia.com/cuda/cusolver/index.html#sygvd-example1
@@ -574,16 +839,20 @@ namespace thxx
 // generate wrappers
 // FIXME do not use legacy preprocessor macro
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("cusolver_batch_eigh", &thxx::cusolver::batch_symmetric_eigenvalue_solve,
+    m.def("batch_eigh", &thxx::cusolver::batch_symmetric_eigenvalue_solve,
           "cusolver based batched eigh implementation");
-    m.def("cusolver_generalized_eigh", &thxx::cusolver::generalized_symmetric_eigenvalue_solve,
+    m.def("batch_complex_eigh", &thxx::cusolver::batch_complex_symmetric_eigenvalue_solve,
+          "cusolver based batched complex eigh implementation");
+    m.def("generalized_eigh", &thxx::cusolver::generalized_symmetric_eigenvalue_solve,
           "cusolver based generalized eigh implementation");
-    m.def("cusolver_batch_svd", &thxx::cusolver::batch_svd,
+    m.def("batch_svd", &thxx::cusolver::batch_svd,
           "cusolver based batch svd implementation");
-    m.def("cusolver_batch_matinv", &thxx::cublas::batch_matinv,
-          "cusolver based batch matrix inverse implementation");
-    m.def("cublas_complex_mm", &thxx::cublas::complex_mm,
+    m.def("batch_matinv", &thxx::cublas::batch_matinv,
+          "cublas based batch matrix inverse implementation");
+    m.def("batch_complex_matinv", &thxx::cublas::batch_complex_matinv,
+          "cublas based batch matrix inverse implementation");
+    m.def("complex_mm", &thxx::cublas::complex_mm,
           "cublas based complex matrix multiplication implementation");
-    m.def("cublas_batch_complex_mm", &thxx::cublas::batch_complex_mm,
+    m.def("batch_complex_mm", &thxx::cublas::batch_complex_mm,
           "cublas based batch complex matrix multiplication implementation");
 }
